@@ -17,17 +17,31 @@ local propagate_priority = {
   ['R '] = 2,
   ['!!'] = 0,
 }
-local default_icons = {
-  [' M'] = { icon = '*', hl = 'FylerGitModified' },
-  ['M '] = { icon = '+', hl = 'FylerGitStaged' },
-  ['MM'] = { icon = '+', hl = 'FylerGitStaged' },
-  ['??'] = { icon = '?', hl = 'FylerGitUntracked' },
-  [' D'] = { icon = '-', hl = 'FylerGitDeleted' },
-  ['D '] = { icon = '-', hl = 'FylerGitStaged' },
-  ['R '] = { icon = '>', hl = 'FylerGitRenamed' },
-  ['UU'] = { icon = '~', hl = 'FylerGitConflict' },
-  ['!!'] = { icon = '.', hl = 'FylerGitIgnored' },
+local status_order = {
+  ['UU'] = 1,
+  ['MM'] = 2,
+  ['M '] = 3,
+  ['AM'] = 4,
+  ['A '] = 5,
+  [' M'] = 6,
+  ['??'] = 7,
+  ['R '] = 8,
+  ['D '] = 9,
+  [' D'] = 10,
+  ['!!'] = 11,
 }
+local default_icons = {
+  [' M'] = { icon = '×', hl = 'FylerGitModified' },
+  ['M '] = { icon = '', hl = 'FylerGitStaged' },
+  ['MM'] = { icon = '', hl = 'FylerGitStaged' },
+  ['??'] = { icon = '', hl = 'FylerGitUntracked' },
+  [' D'] = { icon = '', hl = 'FylerGitDeleted' },
+  ['D '] = { icon = '', hl = 'FylerGitStaged' },
+  ['R '] = { icon = '', hl = 'FylerGitRenamed' },
+  ['UU'] = { icon = '󰧾', hl = 'FylerGitConflict' },
+  ['!!'] = { icon = '󱙝', hl = 'FylerGitIgnored' },
+}
+
 local default_highlights_tbl
 local refresh_count = 0
 local status_cache = {}
@@ -79,6 +93,33 @@ function H.get_icon(xy, icons)
   return nil, nil
 end
 
+function H.is_inside_git_dir(path)
+  local dir = path
+  while #dir > 0 do
+    local name = dir:match('([^/\\]+)[/\\]*$')
+    if name == '.git' then
+      return true
+    end
+    local parent = libpath.to_dirname(dir)
+    if parent == dir then break end
+    dir = parent
+  end
+  return false
+end
+
+function H.mark_git_dir(entries, statuses)
+  for _, entry in ipairs(entries) do
+    local root = H.repo_root(entry.path)
+    if root then
+      local git_dir = libpath.do_join(root, '.git')
+
+      if entry.path == git_dir then
+        statuses[git_dir] = '!!'
+      end
+    end
+  end
+end
+
 function H.store_known_roots()
   local watcher_cfg = require('fyler.config').DATA.extensions.watcher
   if not watcher_cfg or not watcher_cfg.enabled then return end
@@ -90,16 +131,37 @@ function H.store_known_roots()
 end
 
 function H.propagate_to_parents(statuses)
+  local children_statuses = {}
+
   for path, xy in pairs(statuses) do
-    local xy_prio = propagate_priority[xy] or 0
     local dir = libpath.to_dirname(path)
+
     while #dir > 0 do
-      local existing = statuses[dir]
-      if not existing or xy_prio > (propagate_priority[existing] or 0) then statuses[dir] = xy end
+      children_statuses[dir] = children_statuses[dir] or {}
+
+      local found = false
+      for _, existing in ipairs(children_statuses[dir]) do
+        if existing == xy then
+          found = true
+          break
+        end
+      end
+
+      if not found then
+        table.insert(children_statuses[dir], xy)
+      end
+
       local parent = libpath.to_dirname(dir)
       if parent == dir then break end
       dir = parent
     end
+  end
+
+  for dir, child_statuses in pairs(children_statuses) do
+    if statuses[dir] then
+      table.insert(child_statuses, statuses[dir])
+    end
+    statuses[dir] = child_statuses
   end
 end
 
@@ -175,15 +237,14 @@ end
 function H.get_default_highlights()
   if default_highlights_tbl then return default_highlights_tbl end
 
-  local getfg = function(group) return util.highlight_get_color(group, 'fg') end
   return {
-    FylerGitConflict = { fg = '#E06C75' },
-    FylerGitDeleted = { fg = '#E06C75' },
-    FylerGitIgnored = { fg = getfg('Comment') },
-    FylerGitModified = { fg = '#E5C07B' },
-    FylerGitRenamed = { fg = getfg('Directory') },
-    FylerGitStaged = { fg = '#98C379' },
-    FylerGitUntracked = { fg = getfg('Normal') },
+    FylerGitConflictIcon = { fg = '#e06c75' },
+    FylerGitDeletedIcon = { fg = '#fb4934' },
+    FylerGitIgnoredIcon = { fg = '#83a598' },
+    FylerGitModifiedIcon = { fg = '#fb4934' },
+    FylerGitRenamedIcon = { fg = '#8ec07c' },
+    FylerGitStagedIcon = { fg = '#d3869b' },
+    FylerGitUntrackedIcon = { fg = '#8ec07c' },
   }
 end
 
@@ -191,6 +252,7 @@ extensions.register({
   name = 'git',
   setup = function(opts, config)
     config.extensions.git = vim.tbl_deep_extend('force', { icons = vim.deepcopy(default_icons), inline = true }, opts)
+    config.extensions.git.inline = true
   end,
   hooks = {
     finder_refresh_post = function(inst, visible, hl_ns, lines, args)
@@ -201,46 +263,85 @@ extensions.register({
       local current_count = refresh_count
 
       local gc = H.git_col(lines)
+
       local function apply(i, item, stat)
-        local icon, hl = H.get_icon(stat, cfg.icons)
-        if not hl then return end
-        if icon then
-          if cfg.inline then
-            pcall(
-              vim.api.nvim_buf_set_extmark,
-              inst.buf_id,
-              hl_ns,
-              i - 1,
-              item._name_col + #item.name,
-              { virt_text = { { icon, hl } }, hl_mode = 'combine' }
-            )
-          else
-            pcall(
-              vim.api.nvim_buf_set_extmark,
-              inst.buf_id,
-              hl_ns,
-              i - 1,
-              0,
-              { virt_text = { { icon, hl } }, virt_text_win_col = gc, hl_mode = 'combine' }
-            )
+        local icons = {}
+
+        if type(stat) == 'table' then
+          table.sort(stat, function(a, b)
+            return (status_order[a] or 99) < (status_order[b] or 99)
+          end)
+
+          for _, status in ipairs(stat) do
+            local icon, hl = H.get_icon(status, cfg.icons)
+            if icon and hl then
+              table.insert(icons, { icon .. ' ', hl .. 'Icon' })
+            end
+          end
+        else
+          local icon, hl = H.get_icon(stat, cfg.icons)
+          if icon and hl then
+            table.insert(icons, { icon, hl .. 'Icon' })
           end
         end
-        pcall(
-          vim.api.nvim_buf_set_extmark,
-          inst.buf_id,
-          hl_ns,
-          i - 1,
-          item._name_col,
-          { hl_group = hl, end_line = i - 1, end_col = item._name_col + #item.name, hl_mode = 'combine' }
-        )
+
+        if #icons == 0 then return end
+
+        if cfg.inline then
+          pcall(
+            vim.api.nvim_buf_set_extmark,
+            inst.buf_id,
+            hl_ns,
+            i - 1,
+            item._name_col + #item.name,
+            { virt_text = icons, hl_mode = 'combine' }
+          )
+        else
+          pcall(
+            vim.api.nvim_buf_set_extmark,
+            inst.buf_id,
+            hl_ns,
+            i - 1,
+            0,
+            { virt_text = icons, virt_text_win_col = gc, hl_mode = 'combine' }
+          )
+        end
+
+        -- Mantener el resaltado Git del nombre
+        local _, hl = H.get_icon(type(stat) == 'table' and stat[1] or stat, cfg.icons)
+        if hl then
+          pcall(
+            vim.api.nvim_buf_set_extmark,
+            inst.buf_id,
+            hl_ns,
+            i - 1,
+            item._name_col,
+            {
+              hl_group = hl,
+              end_line = i - 1,
+              end_col = item._name_col + #item.name,
+              hl_mode = 'combine',
+            }
+          )
+        end
       end
+
       H.statuses_async(visible, args and args.force, function(statuses)
         if current_count == refresh_count then
+          H.mark_git_dir(visible, statuses)
           H.propagate_to_parents(statuses)
           H.store_known_roots()
+
           for i, item in ipairs(visible) do
             local stat = statuses[item.path]
-            if stat then apply(i, item, stat) end
+
+            if H.is_inside_git_dir(item.path) then
+              stat = '!!'
+            end
+
+            if stat then
+              apply(i, item, stat)
+            end
           end
         end
       end)
