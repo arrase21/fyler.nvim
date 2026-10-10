@@ -155,9 +155,9 @@ H.build_action_confirmation_ui = function(order, fs_actions, pseudo_root_path)
           {
             tag = 'col',
             children = vim
-              .iter(order)
-              :map(function() return { tag = 'text', value = ' │ ', hl = 'FloatBorder' } end)
-              :totable(),
+                .iter(order)
+                :map(function() return { tag = 'text', value = ' │ ', hl = 'FloatBorder' } end)
+                :totable(),
           },
           { tag = 'col', children = action_args_components },
         },
@@ -178,7 +178,7 @@ H.build_action_dependency_graph = function(fs_actions, pseudo_root_path, errors)
 
   vim.iter(fs_actions):each(function(action)
     local splitted_path =
-      libpath.do_split(libpath.to_rel(pseudo_root_path, action.name == 'create' and action.dst or action.src))
+        libpath.do_split(libpath.to_rel(pseudo_root_path, action.name == 'create' and action.dst or action.src))
     local current_node = trie_root
     for i = 1, #splitted_path do
       if not current_node.children[splitted_path[i]] then
@@ -258,6 +258,33 @@ end
 H.build_fs_entry_ui = function(item)
   local entry_state = item.type == 'directory' and { expanded = item.expanded } or nil
   local icon_char, icon_hl = integration_icon.get(item.type, item.path, entry_state)
+  local diagnostic_icon = ""
+  local diagnostic_hl = nil
+
+  if item.type ~= "directory" then
+    local filename = vim.fn.fnamemodify(item.path, ":p")
+
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_valid(buf)
+          and vim.api.nvim_buf_get_name(buf) == filename
+      then
+        local diagnostics = vim.diagnostic.get(buf)
+
+        for _, diagnostic in ipairs(diagnostics) do
+          if diagnostic.severity == vim.diagnostic.severity.ERROR then
+            diagnostic_icon = "●"
+            diagnostic_hl = "DiagnosticError"
+            break
+          elseif diagnostic.severity == vim.diagnostic.severity.WARN then
+            diagnostic_icon = "⚠"
+            diagnostic_hl = "DiagnosticWarn"
+          end
+        end
+
+        break
+      end
+    end
+  end
   local indent = item.depth > 0 and string.rep('  ', item.depth) or ''
   local id_part = string.format('/%0' .. math.ceil(math.log10(state.store_next_id)) .. 'd ', item.id)
   local children = {}
@@ -268,12 +295,28 @@ H.build_fs_entry_ui = function(item)
     name_col = name_col + #indent
   end
 
-  if icon_char and #icon_char > 0 then
-    table.insert(children, { tag = 'text', value = icon_char, hl = icon_hl })
-    table.insert(children, { tag = 'text', value = ' ' })
-    name_col = name_col + #icon_char + 1
+  if diagnostic_icon ~= "" then
+    table.insert(children, {
+      tag = "text",
+      value = diagnostic_icon,
+      hl = diagnostic_hl,
+    })
+    table.insert(children, { tag = "text", value = "  " })
+    name_col = name_col + vim.fn.strdisplaywidth(diagnostic_icon) + 2
+  else
+    table.insert(children, { tag = "text", value = "   " })
+    name_col = name_col + 3
   end
 
+  if icon_char and #icon_char > 0 then
+    table.insert(children, {
+      tag = "text",
+      value = icon_char,
+      hl = icon_hl,
+    })
+    table.insert(children, { tag = "text", value = "  " })
+    name_col = name_col + vim.fn.strdisplaywidth(icon_char) + 2
+  end
   table.insert(children, { tag = 'text', value = id_part })
   name_col = name_col + #id_part
   table.insert(children, {
@@ -356,13 +399,13 @@ H.compute_fs_actions = function(instance, id_to_path, buf_lines)
 
   local seen = {}
   fs_actions = vim
-    .iter(fs_actions)
-    :filter(function(fs_action)
-      if seen[H.build_fs_action_id(fs_action)] then return false end
-      seen[H.build_fs_action_id(fs_action)] = true
-      return true
-    end)
-    :totable()
+      .iter(fs_actions)
+      :filter(function(fs_action)
+        if seen[H.build_fs_action_id(fs_action)] then return false end
+        seen[H.build_fs_action_id(fs_action)] = true
+        return true
+      end)
+      :totable()
 
   return fs_actions, errors
 end
@@ -625,17 +668,17 @@ function Finder:close()
     -- but still fragile across Neovim versions and edge cases).
     local target_buf = -1
     if
-      self._origin_buf_id
-      and self._origin_buf_id ~= self.buf_id
-      and util.buffer_is_valid(self._origin_buf_id)
-      and vim.bo[self._origin_buf_id].filetype ~= 'fyler_finder'
+        self._origin_buf_id
+        and self._origin_buf_id ~= self.buf_id
+        and util.buffer_is_valid(self._origin_buf_id)
+        and vim.bo[self._origin_buf_id].filetype ~= 'fyler_finder'
     then
       target_buf = self._origin_buf_id
     else
       target_buf = vim.api.nvim_win_call(self.win_id, function() return vim.fn.bufnr('#') end)
       if
-        target_buf == self.buf_id
-        or (util.buffer_is_valid(target_buf) and vim.bo[target_buf].filetype == 'fyler_finder')
+          target_buf == self.buf_id
+          or (util.buffer_is_valid(target_buf) and vim.bo[target_buf].filetype == 'fyler_finder')
       then
         target_buf = -1
       end
@@ -735,9 +778,9 @@ function Finder:mutate()
   end, { skip_hidden = true, sort_children = true, hidden_items = self.cache.ui.hidden_items })
 
   local buf_lines = vim
-    .iter(vim.api.nvim_buf_get_lines(self.buf_id, 0, -1, false))
-    :filter(function(buf_line) return #buf_line > 0 end)
-    :totable()
+      .iter(vim.api.nvim_buf_get_lines(self.buf_id, 0, -1, false))
+      :filter(function(buf_line) return #buf_line > 0 end)
+      :totable()
 
   local fs_actions, errors = H.compute_fs_actions(self, id_to_path, buf_lines)
   local graph, in_degree = H.build_action_dependency_graph(fs_actions, self.state.pseudo_root_path, errors)
@@ -804,10 +847,10 @@ function Finder:mutate()
   end
 
   local is_simple = action_counts.copy <= 1
-    and action_counts.delete <= 0
-    and action_counts.trash <= 0
-    and action_counts.move <= 1
-    and action_counts.create <= 5
+      and action_counts.delete <= 0
+      and action_counts.trash <= 0
+      and action_counts.move <= 1
+      and action_counts.create <= 5
 
   local do_execute = function()
     local ordered_actions = vim.iter(order):map(function(i) return fs_actions[i] end):totable()
