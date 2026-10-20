@@ -272,11 +272,11 @@ H.build_fs_entry_ui = function(item)
 
         for _, diagnostic in ipairs(diagnostics) do
           if diagnostic.severity == vim.diagnostic.severity.ERROR then
-            diagnostic_icon = "●"
+            diagnostic_icon = ""
             diagnostic_hl = "DiagnosticError"
             break
           elseif diagnostic.severity == vim.diagnostic.severity.WARN then
-            diagnostic_icon = "⚠"
+            diagnostic_icon = ""
             diagnostic_hl = "DiagnosticWarn"
           end
         end
